@@ -1,7 +1,8 @@
-// Vercel serverless function: POST /api/hemobot
+// /api/hemobot.js — Vercel serverless function
 import OpenAI from "openai";
 
-// --- inicialização do cliente (suporta OPENAI_PROJECT opcional) ---
+const ORIGIN = "https://hemobot.com.br";
+
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   ...(process.env.OPENAI_PROJECT ? { project: process.env.OPENAI_PROJECT } : {}),
@@ -9,21 +10,31 @@ const client = new OpenAI({
 
 const ASSISTANT_ID = process.env.ASSISTANT_ID;
 
-// ---- utilitários de normalização/tema ----
-const STEMS = ["doa", "hemosul", "sang", "hemoter"]; // doa(ção/ções/doar), sang(ue), hemoter(apia)
+const STEMS = ["doa", "hemosul", "sang", "hemoter"];
 const norm = (s) =>
   String(s || "")
     .toLowerCase()
     .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, ""); // remove acentos
+    .replace(/\p{Diacritic}/gu, "");
 
 export default async function handler(req, res) {
+  // === CORS + debug header (sempre, antes de qualquer return) ===
+  res.setHeader("Access-Control-Allow-Origin", ORIGIN);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Max-Age", "86400");
+  res.setHeader("X-Debug-CORS", "on"); // <-- debug
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   try {
     if (req.method !== "POST") {
       return res.status(405).json({ answer: "Use POST." });
     }
 
-    // validações básicas
     if (!process.env.OPENAI_API_KEY || !ASSISTANT_ID) {
       return res.status(500).json({
         answer:
@@ -31,12 +42,10 @@ export default async function handler(req, res) {
       });
     }
 
-    // extrai mensagem
     const { message = "" } = req.body || {};
     const userMessage = String(message).slice(0, 4000);
     const lower = norm(userMessage);
 
-    // ---- TRAVA 1: fora do tema (robusta a plural/acentos) ----
     const dentroDoTema = STEMS.some((stem) => lower.includes(stem));
     if (!dentroDoTema) {
       return res.json({
@@ -45,32 +54,25 @@ export default async function handler(req, res) {
       });
     }
 
-    // ---- Assistants API: thread → message → run ----
     const thread = await client.beta.threads.create();
-
     await client.beta.threads.messages.create(thread.id, {
       role: "user",
       content: userMessage,
     });
-
     const run = await client.beta.threads.runs.create(thread.id, {
       assistant_id: ASSISTANT_ID,
-      tool_choice: "auto", // permite File Search do seu assistente
+      tool_choice: "auto",
     });
 
-    // aguarda conclusão do run
     let status = await client.beta.threads.runs.retrieve(thread.id, run.id);
     while (status.status === "queued" || status.status === "in_progress") {
       await new Promise((r) => setTimeout(r, 700));
       status = await client.beta.threads.runs.retrieve(thread.id, run.id);
     }
 
-    // coleta a última mensagem do assistente
     const msgs = await client.beta.threads.messages.list(thread.id);
     const last = msgs.data.find((m) => m.role === "assistant");
 
-    // ---- TRAVA 2: sem evidência de uso de arquivos (retrieval) ----
-    // Heurística: procura marcas de arquivos/citações/anotações no objeto retornado
     const raw = JSON.stringify(last || {});
     const usedFiles =
       raw.includes("file_citation") ||
@@ -84,7 +86,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // extrai texto
     const textPart = last?.content?.find((p) => p.type === "text");
     const answer =
       textPart?.text?.value?.trim() ||
