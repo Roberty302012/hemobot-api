@@ -1,0 +1,8 @@
+{
+  "name": "hemobot-api",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "openai": "^4.57.0"
+  }
+}
