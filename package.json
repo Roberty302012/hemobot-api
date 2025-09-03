@@ -1,7 +1,11 @@
 {
   "name": "hemobot-api",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "start": "node api/hemobot.js"
+  },
   "dependencies": {
     "openai": "^4.57.0"
   }
