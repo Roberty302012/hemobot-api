@@ -1,7 +1,7 @@
 // /api/hemobot.js — função serverless da API do Hemobot
 import OpenAI from "openai";
 
-const ORIGIN = "https://hemobot.com.br"; // ajuste se necessário
+const ORIGIN = "https://hemobot.com.br"; // ajuste se seu frontend usar outro domínio
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -55,8 +55,16 @@ export default async function handler(req, res) {
       return res.status(400).json({ answer: "Mensagem vazia." });
     }
 
+    if (!client.apiKey) {
+      return res
+        .status(500)
+        .json({ answer: "Configuração ausente: OPENAI_API_KEY." });
+    }
+
     if (!ASSISTANT_ID) {
-      return res.status(500).json({ answer: "Configuração ausente: ASSISTANT_ID." });
+      return res
+        .status(500)
+        .json({ answer: "Configuração ausente: ASSISTANT_ID." });
     }
 
     // Se não veio threadId, cria um novo thread (primeira interação)
@@ -102,11 +110,13 @@ export default async function handler(req, res) {
 
     // Devolve também o threadId para o front-end reaproveitar
     return res.status(200).json({ answer, threadId });
-
   } catch (err) {
-    console.error(err);
-    return res
-      .status(500)
-      .json({ answer: "Erro ao processar sua mensagem no servidor." });
+    console.error("ERRO NO HEMOBOT API:", err);
+
+    // TEMPORÁRIO: devolver detalhes pro front pra depurar
+    return res.status(500).json({
+      answer: "Erro ao processar sua mensagem no servidor.",
+      details: err?.message || err?.toString?.() || "Erro desconhecido",
+    });
   }
 }
