@@ -1,7 +1,7 @@
-// /api/hemobot.js — Vercel serverless function (Drop-in replacement)
+// /api/hemobot.js — função serverless da API do Hemobot
 import OpenAI from "openai";
 
-const ORIGIN = "https://hemobot.com.br";
+const ORIGIN = "https://hemobot.com.br"; // ajuste se necessário
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -10,19 +10,6 @@ const client = new OpenAI({
 
 const ASSISTANT_ID = process.env.ASSISTANT_ID;
 
-// Normalização simples
-const norm = (s) =>
-  String(s || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .replace(/[!.,;:?]/g, "");
-
-// Saudações aceitas
-const SAUDACOES = new Set(["bom dia", "boa tarde", "boa noite"]);
-const isGreeting = (msg) => SAUDACOES.has(norm(msg));
-
 // CORS básico
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", ORIGIN);
@@ -30,7 +17,7 @@ function setCors(res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
 
-// No-cache
+// Evitar cache
 function setNoCache(res) {
   res.setHeader("Cache-Control", "no-store, no-cache, max-age=0, must-revalidate");
   res.setHeader("Pragma", "no-cache");
@@ -53,37 +40,42 @@ export default async function handler(req, res) {
     // Tenta ler o corpo como JSON de forma segura
     let body = {};
     try {
-      body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
+      body =
+        typeof req.body === "string"
+          ? JSON.parse(req.body || "{}")
+          : req.body || {};
     } catch {
       body = {};
     }
 
     const userMessage = body?.message ?? body?.text ?? "";
+    let threadId = body?.threadId || null;
 
-    // PRIORIDADE MÁXIMA: saudações simples
-    if (isGreeting(userMessage)) {
-      return res.status(200).json({
-        answer:
-          "Bom dia! 👋 Eu sou o Zé Sanguinho, do Hemosul. Estou aqui para te ajudar com suas dúvidas sobre doação de sangue.",
-      });
+    if (!userMessage) {
+      return res.status(400).json({ answer: "Mensagem vazia." });
     }
 
     if (!ASSISTANT_ID) {
       return res.status(500).json({ answer: "Configuração ausente: ASSISTANT_ID." });
     }
 
-    // Cria thread, envia mensagem do usuário e dispara o run do Assistente
-    const thread = await client.beta.threads.create();
-    await client.beta.threads.messages.create(thread.id, {
+    // Se não veio threadId, cria um novo thread (primeira interação)
+    if (!threadId) {
+      const thread = await client.beta.threads.create();
+      threadId = thread.id;
+    }
+
+    // Envia a mensagem do usuário para o thread existente
+    await client.beta.threads.messages.create(threadId, {
       role: "user",
-      content: userMessage || "",
+      content: userMessage,
     });
 
-    let run = await client.beta.threads.runs.create(thread.id, {
+    // Dispara o run do Assistente
+    let run = await client.beta.threads.runs.create(threadId, {
       assistant_id: ASSISTANT_ID,
     });
 
-    // Polling simples até completar (timeout defensivo ~25s)
     const start = Date.now();
     const TIMEOUT_MS = 25000;
 
@@ -92,21 +84,30 @@ export default async function handler(req, res) {
       if (Date.now() - start > TIMEOUT_MS) break;
 
       await new Promise((r) => setTimeout(r, 1000));
-      run = await client.beta.threads.runs.retrieve(thread.id, run.id);
+      run = await client.beta.threads.runs.retrieve(threadId, run.id);
     }
 
     // Busca a última mensagem do assistente
-    const messages = await client.beta.threads.messages.list(thread.id, { order: "desc", limit: 10 });
-    const last = messages?.data?.find((m) => m.role === "assistant");
+    const messages = await client.beta.threads.messages.list(threadId, {
+      order: "desc",
+      limit: 10,
+    });
 
+    const last = messages?.data?.find((m) => m.role === "assistant");
     const textPart = last?.content?.find?.((p) => p.type === "text");
+
     const answer =
       textPart?.text?.value?.trim() ||
       "Desculpe, não encontrei a informação nos documentos.";
 
-    return res.status(200).json({ answer });
+    // Devolve também o threadId para o front-end reaproveitar
+    return res.status(200).json({ answer, threadId });
+
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ answer: "Erro ao processar sua mensagem no servidor." });
+    return res
+      .status(500)
+      .json({ answer: "Erro ao processar sua mensagem no servidor." });
   }
+}
 }
