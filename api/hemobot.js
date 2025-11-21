@@ -110,4 +110,3 @@ export default async function handler(req, res) {
       .json({ answer: "Erro ao processar sua mensagem no servidor." });
   }
 }
-}
